@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum ConnectionStatus {
+  DEMO
+  CONNECTED
+  ERROR
+  DISCONNECTED
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum AllocationStatus {
+  OPEN
+  ALLOCATED
+  EXCLUDED
+}
+
+enum CostCategory {
+  SHIPPING
+  LAB
+  CUSTOMS
+  PACKAGING
+  OTHER
+}
+
+model QboConnection {
+  id                    String           @id @default(cuid())
+  realmId               String           @unique
+  companyName           String
+  environment           String           @default("sandbox")
+  status                ConnectionStatus @default(DISCONNECTED)
+  accessTokenEncrypted  String?
+  refreshTokenEncrypted String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  lastSyncAt            DateTime?
+  lastError             String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  products              Product[]
+  syncRuns              SyncRun[]
+  transactions          Transaction[]
+}
+
+model SyncRun {
+  id                   String        @id @default(cuid())
+  connectionId         String
+  status               SyncStatus    @default(RUNNING)
+  startedAt            DateTime      @default(now())
+  completedAt          DateTime?
+  importedItems        Int           @default(0)
+  importedTransactions Int           @default(0)
+  error                 String?
+  connection            QboConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  snapshots             InventorySnapshot[]
+}
+
+model Product {
+  id              String        @id @default(cuid())
+  connectionId    String
+  qboId           String
+  syncToken       String?
+  sku             String?
+  name            String
+  active          Boolean       @default(true)
+  type            String        @default("Inventory")
+  trackQtyOnHand  Boolean       @default(true)
+  qtyOnHand       Decimal       @default(0)
+  purchaseCost    Decimal       @default(0)
+  unitPrice       Decimal       @default(0)
+  inventoryValue  Decimal?
+  sourceUpdatedAt DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  connection      QboConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  snapshots       InventorySnapshot[]
+  transactionLines TransactionLine[]
+  allocations     CostAllocation[]
+
+  @@unique([connectionId, qboId])
+  @@index([connectionId, active])
+}
+
+model InventorySnapshot {
+  id             String   @id @default(cuid())
+  productId      String
+  syncRunId      String?
+  qtyOnHand      Decimal
+  inventoryValue Decimal?
+  capturedAt     DateTime @default(now())
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  syncRun        SyncRun? @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+
+  @@index([productId, capturedAt])
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  connectionId    String
+  qboId           String
+  type            String
+  syncToken       String?
+  txnDate         DateTime
+  docNumber       String?
+  vendorName      String?
+  currency        String            @default("EUR")
+  totalAmount     Decimal            @default(0)
+  sourceStatus    String             @default("ACTIVE")
+  sourceUpdatedAt DateTime?
+  rawPayload      Json?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  connection      QboConnection      @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  lines           TransactionLine[]
+
+  @@unique([connectionId, type, qboId])
+  @@index([connectionId, txnDate])
+}
+
+model TransactionLine {
+  id              String           @id @default(cuid())
+  transactionId   String
+  qboLineId       String
+  productId       String?
+  description     String?
+  detailType      String
+  accountName     String?
+  quantity        Decimal?
+  unitPrice       Decimal?
+  amount          Decimal          @default(0)
+  suggestedCategory CostCategory?
+  allocationStatus AllocationStatus @default(OPEN)
+  transaction     Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  product         Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+  allocations     CostAllocation[]
+
+  @@unique([transactionId, qboLineId])
+  @@index([productId])
+  @@index([allocationStatus])
+}
+
+model CostAllocation {
+  id           String       @id @default(cuid())
+  lineId       String
+  productId    String
+  category     CostCategory
+  amount       Decimal
+  method       String       @default("MANUAL")
+  note         String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  line         TransactionLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([lineId])
+  @@index([productId])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
